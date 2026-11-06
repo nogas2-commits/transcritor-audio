@@ -116,7 +116,7 @@
       <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Para pastas grandes no PC, use a versão em Python da pasta <code>python/</code>.</p>
     </section>
   </div>
-  <footer class="ver">Transcritor de Áudio · <strong>versão 1.2</strong> · atualizado em 06/11/2026 · leitor extra para M4A sem perda (ALAC), AMR, WMA</footer>
+  <footer class="ver">Transcritor de Áudio · <strong>versão 1.3</strong> · atualizado em 06/11/2026 · áudios longos (1h+) e leitor extra para ALAC, AMR, WMA</footer>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -200,6 +200,9 @@ async function decodeFFmpeg(file, onStatus) {
   }
 }
 async function decode(file, onStatus) {
+  // Arquivos grandes (> 40 MB, ~40 min ou mais) vão direto ao FFmpeg: o leitor nativo descompacta tudo
+  // na taxa original (ex.: 1h48 estéreo 44,1 kHz ≈ 2,3 GB de memória) e costuma falhar.
+  if (file.size > 40 * 1024 * 1024) return await decodeFFmpeg(file, onStatus);
   try { return await decodeNative(await file.arrayBuffer()); }
   catch (e) { return await decodeFFmpeg(file, onStatus); }
 }
