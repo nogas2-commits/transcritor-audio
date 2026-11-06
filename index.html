@@ -116,7 +116,7 @@
       <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Para pastas grandes no PC, use a versão em Python da pasta <code>python/</code>.</p>
     </section>
   </div>
-  <footer class="ver">Transcritor de Áudio · <strong>versão 1.1</strong> · atualizado em 06/11/2026 · leitor extra para M4A sem perda (ALAC), AMR, WMA</footer>
+  <footer class="ver">Transcritor de Áudio · <strong>versão 1.2</strong> · atualizado em 06/11/2026 · leitor extra para M4A sem perda (ALAC), AMR, WMA</footer>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -175,11 +175,11 @@ let ffmpegP = null;
 function getFFmpeg(onStatus) {
   if (!ffmpegP) ffmpegP = (async () => {
     onStatus && onStatus("Baixando leitor de formatos extras (~32 MB, só na 1ª vez)…");
-    const { FFmpeg } = await import("./vendor/ffmpeg/index.js");
-    const parts = await Promise.all([0, 1, 2].map(i => fetch(`vendor/ffmpeg/ffmpeg-core.wasm.part${i}`).then(r => { if (!r.ok) throw new Error("leitor extra não encontrado"); return r.blob(); })));
+    const { FFmpeg } = await import("./vendor/index.js");
+    const parts = await Promise.all([0, 1, 2].map(i => fetch(`vendor/ffmpeg-core.wasm.part${i}`).then(r => { if (!r.ok) throw new Error("leitor extra não encontrado"); return r.blob(); })));
     const wasmURL = URL.createObjectURL(new Blob(parts, { type: "application/wasm" }));
     const ff = new FFmpeg();
-    await ff.load({ coreURL: new URL("vendor/ffmpeg/ffmpeg-core.js", location.href).href, wasmURL });
+    await ff.load({ coreURL: new URL("vendor/ffmpeg-core.js", location.href).href, wasmURL });
     return ff;
   })().catch(e => { ffmpegP = null; throw e; });
   return ffmpegP;
