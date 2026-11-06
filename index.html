@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcritor de Áudio</title>
+<style>
+  :root {
+    --bg: #f7f6f3; --panel: #ffffff; --ink: #1f1e1c; --muted: #6b6862; --line: #e4e1da;
+    --accent: #2f5d50; --accent-soft: #e3ece8; --warn: #9a4b1c; --ok: #2f6b3a;
+    --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171716; --panel: #201f1d; --ink: #ecebe7; --muted: #a29f97; --line: #34332f;
+      --accent: #7fbfa8; --accent-soft: #24332d; --warn: #e0a070; --ok: #8fd09a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 40px; }
+  header h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  header p { margin: 0 0 20px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 26px 14px; text-align: center;
+    cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  .drop span { color: var(--muted); font-size: 13px; }
+  .opts { margin-top: 14px; display: grid; gap: 8px; font-size: 14px; }
+  .opts label { display: flex; gap: 8px; align-items: center; }
+  .opts select { flex: 1; padding: 5px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); }
+  .engine { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .engine b { color: var(--ink); font-weight: 600; }
+  .files { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; }
+  .files li { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+  .files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .files .st { color: var(--muted); grid-column: 1 / -1; }
+  .files .st.err { color: var(--warn); } .files .st.done { color: var(--ok); }
+  .files button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; grid-column: 1 / -1; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .outhead { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .stats { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  button.b { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px;
+    padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  button.b:hover:not(:disabled) { border-color: var(--accent); }
+  button.b.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+  button.b:disabled { opacity: .45; cursor: default; }
+  textarea { width: 100%; min-height: 560px; resize: vertical; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; font: 13px/1.55 var(--mono); background: var(--bg); color: var(--ink); }
+  .note { font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .hidden { display: none !important; }
+  .ver { margin-top: 18px; text-align: center; font-size: 12px; color: var(--muted); }
+  .ver strong { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Transcritor de Áudio</h1>
+    <p>Áudios e vídeos viram texto, com tempos de cada fala e exportação para .txt, .srt e Excel. Tudo roda no seu navegador; nenhum áudio sai daqui.</p>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Escolher arquivos">
+        <strong>Solte áudios aqui</strong>
+        <span>ou clique para escolher · MP3, M4A, WAV, OGG, OPUS (WhatsApp), FLAC, AAC, MP4, WEBM</span>
+      </div>
+      <input type="file" id="pick" multiple class="hidden"
+        accept="audio/*,video/*,.opus,.ogg,.m4a,.mp3,.wav,.flac,.aac,.mp4,.webm,.mov,.mkv">
+
+      <div class="opts">
+        <label>Modelo
+          <select id="model">
+            <option value="onnx-community/whisper-tiny">Tiny · mais rápido, menos preciso (~40 MB)</option>
+            <option value="onnx-community/whisper-base">Base · rápido (~80 MB)</option>
+            <option value="onnx-community/whisper-small" selected>Small · equilíbrio (~250 MB)</option>
+            <option value="onnx-community/whisper-large-v3-turbo">Large v3 Turbo · mais preciso, ideal com GPU (~800 MB)</option>
+          </select>
+        </label>
+        <label>Idioma
+          <select id="lang">
+            <option value="portuguese">Português</option>
+            <option value="english">Inglês</option>
+            <option value="spanish">Espanhol</option>
+            <option value="">Detectar automaticamente</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="optTimes" checked> Mostrar tempo de cada fala no texto</label>
+        <label><input type="checkbox" id="optTitles" checked> Título com o nome de cada arquivo</label>
+      </div>
+      <div class="engine" id="engine">Modelo ainda não carregado. Na 1ª vez ele é baixado e fica guardado no navegador.</div>
+
+      <ul class="files" id="files"></ul>
+    </section>
+
+    <section class="card">
+      <div class="outhead">
+        <div class="stats" id="stats">Nenhum áudio transcrito ainda.</div>
+        <div class="btns">
+          <button class="b" id="clear" disabled>Limpar</button>
+          <button class="b" id="copy" disabled>Copiar</button>
+          <button class="b" id="saveTxt" disabled>Exportar .txt</button>
+          <button class="b" id="saveSrt" disabled>Exportar .srt</button>
+          <button class="b primary" id="saveXlsx" disabled>Exportar .xlsx</button>
+        </div>
+      </div>
+      <textarea id="out" spellcheck="false" placeholder="A transcrição aparece aqui conforme avança. Você pode editar antes de copiar ou exportar .txt."></textarea>
+      <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Para pastas grandes no PC, use a versão em Python da pasta <code>python/</code>.</p>
+    </section>
+  </div>
+  <footer class="ver">Transcritor de Áudio · <strong>versão 1.0</strong> · atualizado em 06/11/2026 · Whisper no navegador</footer>
+</div>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SR = 16000;
+const queue = [];          // {id, file, li, status, segs, text, duration, secs, err}
+let running = false, seq = 0, loadedModel = "", device = "";
+
+// ---------- worker ----------
+const worker = new Worker("worker.js", { type: "module" });
+let pending = null;
+const dl = {};
+worker.onmessage = (ev) => {
+  const m = ev.data;
+  if (m.type === "dl") {
+    dl[m.file] = [m.loaded || 0, m.total || 0];
+    let a = 0, b = 0; for (const k in dl) { a += dl[k][0]; b += dl[k][1]; }
+    $("engine").innerHTML = `Baixando modelo… <b>${b ? Math.round(a / b * 100) : 0}%</b> (${(a / 1048576).toFixed(0)} de ${(b / 1048576).toFixed(0)} MB) — só na 1ª vez`;
+    return;
+  }
+  if (pending) { const p = pending; pending = null; m.type === "error" ? p.reject(new Error(m.message)) : p.resolve(m); }
+};
+worker.onerror = (e) => { if (pending) { const p = pending; pending = null; p.reject(new Error(e.message || "Falha no worker")); } };
+function ask(msg, transfer) { return new Promise((resolve, reject) => { pending = { resolve, reject }; worker.postMessage(msg, transfer || []); }); }
+
+// ---------- utilidades ----------
+function fmt(t, srt) {
+  t = Math.max(0, t || 0);
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = Math.floor(t % 60), ms = Math.round((t - Math.floor(t)) * 1000) % 1000;
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return srt ? `${p(h)}:${p(m)}:${p(s)},${p(ms, 3)}` : `${p(h)}:${p(m)}:${p(s)}`;
+}
+function rms(x, a, b) { let s = 0; for (let i = a; i < b; i++) s += x[i] * x[i]; return Math.sqrt(s / Math.max(1, b - a)); }
+const stem = (n) => n.replace(/\.[^.]+$/, "");
+function download(name, data, type) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+async function decode(file) {
+  const buf = await file.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+  try {
+    const ab = await ctx.decodeAudioData(buf);
+    if (ab.numberOfChannels === 1) return ab.getChannelData(0).slice();
+    const out = new Float32Array(ab.length);
+    for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < d.length; i++) out[i] += d[i] / ab.numberOfChannels; }
+    return out;
+  } finally { ctx.close(); }
+}
+
+// Corta em blocos de até ~29 s, sempre no ponto mais silencioso entre 22 e 29 s (evita cortar palavras)
+function split(x) {
+  const parts = []; let pos = 0; const fr = SR / 10, step = SR / 20;
+  while (x.length - pos > 29 * SR) {
+    let best = pos + 29 * SR - fr, bestE = Infinity;
+    for (let i = pos + 22 * SR; i + fr <= pos + 29 * SR; i += step) { const e = rms(x, i, i + fr); if (e < bestE) { bestE = e; best = i; } }
+    const cut = best + Math.floor(fr / 2);
+    parts.push([pos, cut]); pos = cut;
+  }
+  if (x.length - pos > SR / 4) parts.push([pos, x.length]);
+  return parts;
+}
+const HALLU = /^(legendas? (pela|por)|obrigad[oa] por assistir|inscreva-se|\.+$|\[m[uú]sica\]|transcrição|amara\.org)/i;
+
+// ---------- fila ----------
+function addFiles(list) {
+  for (const f of list) {
+    const it = { id: ++seq, file: f, status: "Na fila", segs: [], text: "", duration: 0, secs: 0, err: "" };
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="name"></span><button title="Remover">✕</button><span class="st"></span><span class="bar"><i></i></span>`;
+    li.querySelector(".name").textContent = f.name;
+    li.querySelector("button").onclick = () => {
+      if (it.status.startsWith("Transcrevendo") || it.status.startsWith("Lendo")) return;
+      queue.splice(queue.indexOf(it), 1); li.remove(); render();
+    };
+    it.li = li; $("files").appendChild(li); queue.push(it); setSt(it, "Na fila");
+  }
+  run();
+}
+function setSt(it, txt, cls, pct) {
+  it.status = txt; const st = it.li.querySelector(".st"); st.textContent = txt; st.className = "st " + (cls || "");
+  if (pct != null) it.li.querySelector(".bar i").style.width = pct + "%";
+}
+
+async function run() {
+  if (running) return; running = true;
+  try {
+    for (const it of queue) {
+      if (it.status !== "Na fila") continue;
+      const model = $("model").value, language = $("lang").value;
+      try {
+        if (loadedModel !== model) {
+          setSt(it, "Carregando modelo…", "", 0);
+          for (const k in dl) delete dl[k];
+          const r = await ask({ type: "load", model });
+          loadedModel = model; device = r.device;
+          $("engine").innerHTML = `Modelo <b>${model.split("/")[1]}</b> pronto · rodando em <b>${device}</b>`;
+        }
+        setSt(it, "Lendo áudio…", "", 0);
+        const x = await decode(it.file);
+        it.duration = x.length / SR; it.model = model.split("/")[1]; it.segs = [];
+        const parts = split(x), t0 = performance.now();
+        for (let k = 0; k < parts.length; k++) {
+          const [a, b] = parts[k], off = a / SR, end = b / SR;
+          setSt(it, `Transcrevendo… ${fmt(off)} de ${fmt(it.duration)}`, "", Math.round(k / parts.length * 100));
+          if (rms(x, a, b) < 0.003) continue;                       // trecho em silêncio
+          const r = await ask({ type: "chunk", id: it.id, audio: x.slice(a, b), language: language || null });
+          const chunks = r.chunks.length ? r.chunks : [{ timestamp: [0, end - off], text: r.text }];
+          for (const c of chunks) {
+            const txt = (c.text || "").trim(); if (!txt || HALLU.test(txt)) continue;
+            const s = off + (c.timestamp?.[0] ?? 0), e = Math.min(end, off + (c.timestamp?.[1] ?? (end - off)));
+            const last = it.segs[it.segs.length - 1];
+            if (last && last.text === txt && s - last.end < 2) continue; // repetição na emenda
+            it.segs.push({ start: s, end: Math.max(e, s), text: txt });
+          }
+          render();
+        }
+        it.secs = (performance.now() - t0) / 1000;
+        it.text = it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ").trim();
+        setSt(it, `Concluído · ${fmt(it.duration)} de áudio em ${it.secs.toFixed(0)} s · ${it.text ? it.text.split(" ").length : 0} palavras`, "done", 100);
+      } catch (e) {
+        it.err = e.message || String(e);
+        const msg = /decode|Unable|EncodingError/i.test(it.err) ? "o navegador não conseguiu ler este formato"
+                  : (/fetch|network|load/i.test(it.err) && loadedModel !== $("model").value) ? "não foi possível baixar o modelo (na 1ª vez precisa de internet)" : it.err;
+        setSt(it, "Erro: " + msg, "err", 0);
+      }
+      render();
+    }
+  } finally { running = false; }
+  if (queue.some(q => q.status === "Na fila")) run();
+}
+
+// ---------- saída ----------
+function render() {
+  const times = $("optTimes").checked, titles = $("optTitles").checked;
+  const blocks = [];
+  for (const it of queue) {
+    if (!it.segs.length && !it.status.startsWith("Concluído")) continue;
+    let body = times ? it.segs.map(s => `[${fmt(s.start)}] ${s.text}`).join("\n")
+                     : it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ");
+    blocks.push((titles ? `# ${it.file.name}\n\n` : "") + body);
+  }
+  $("out").value = blocks.join("\n\n");
+  const done = queue.filter(q => q.status.startsWith("Concluído"));
+  const dur = done.reduce((a, q) => a + q.duration, 0), words = done.reduce((a, q) => a + (q.text ? q.text.split(" ").length : 0), 0);
+  $("stats").innerHTML = done.length ? `<b>${done.length}</b> áudio(s) · <b>${fmt(dur)}</b> de áudio · <b>${words.toLocaleString("pt-BR")}</b> palavras` : (queue.length ? "Transcrevendo…" : "Nenhum áudio transcrito ainda.");
+  const has = $("out").value.trim().length > 0;
+  for (const id of ["clear", "copy", "saveTxt"]) $(id).disabled = !has && !queue.length;
+  $("saveSrt").disabled = $("saveXlsx").disabled = !done.length;
+}
+const doneItems = () => queue.filter(q => q.status.startsWith("Concluído"));
+const carimbo = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
+
+$("saveTxt").onclick = () => {
+  const d = doneItems();
+  const name = d.length === 1 ? stem(d[0].file.name) + ".txt" : `transcricoes_${carimbo()}.txt`;
+  download(name, $("out").value, "text/plain;charset=utf-8");
+};
+$("saveSrt").onclick = () => {
+  for (const it of doneItems()) {
+    const srt = it.segs.map((s, i) => `${i + 1}\n${fmt(s.start, true)} --> ${fmt(s.end, true)}\n${s.text}\n`).join("\n");
+    download(stem(it.file.name) + ".srt", srt, "text/plain;charset=utf-8");
+  }
+};
+$("saveXlsx").onclick = () => {
+  const d = queue.filter(q => q.status.startsWith("Concluído") || q.status.startsWith("Erro"));
+  const resumo = [["Arquivo", "Duração", "Tempo proc. (s)", "Palavras", "Status", "Modelo", "Texto"]];
+  const trechos = [["Arquivo", "Início", "Fim", "Texto"]];
+  for (const it of d) {
+    const ok = it.status.startsWith("Concluído");
+    resumo.push([it.file.name, ok ? fmt(it.duration) : "", ok ? Math.round(it.secs * 10) / 10 : "", ok && it.text ? it.text.split(" ").length : 0,
+                 ok ? "OK" : "ERRO: " + it.err, it.model || "", it.text]);
+    for (const s of it.segs) trechos.push([it.file.name, fmt(s.start), fmt(s.end), s.text]);
+  }
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.aoa_to_sheet(resumo), ws2 = XLSX.utils.aoa_to_sheet(trechos);
+  ws1["!cols"] = [{ wch: 34 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 100 }];
+  ws2["!cols"] = [{ wch: 34 }, { wch: 10 }, { wch: 10 }, { wch: 100 }];
+  ws1["!autofilter"] = { ref: ws1["!ref"] }; ws2["!autofilter"] = { ref: ws2["!ref"] };
+  XLSX.utils.book_append_sheet(wb, ws1, "Transcricoes"); XLSX.utils.book_append_sheet(wb, ws2, "Trechos");
+  XLSX.writeFile(wb, `consolidado_transcricoes_${carimbo()}.xlsx`);
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("out").value); } catch (_) { $("out").select(); document.execCommand("copy"); }
+  $("copy").textContent = "Copiado ✓"; setTimeout(() => $("copy").textContent = "Copiar", 1400);
+};
+$("clear").onclick = () => {
+  for (let i = queue.length - 1; i >= 0; i--) { const it = queue[i]; if (it.status.startsWith("Transcrevendo") || it.status.startsWith("Lendo") || it.status.startsWith("Carregando")) continue; it.li.remove(); queue.splice(i, 1); }
+  render(); if (!queue.length) $("out").value = "";
+};
+$("optTimes").onchange = $("optTitles").onchange = render;
+
+// ---------- entrada ----------
+const drop = $("drop"), pick = $("pick");
+drop.onclick = () => pick.click();
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick.click(); } };
+pick.onchange = () => { addFiles([...pick.files]); pick.value = ""; };
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => addFiles([...e.dataTransfer.files]));
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => { if (!drop.contains(e.target)) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } });
+if (location.protocol === "file:") $("engine").innerHTML = "<b>Abra pelo “Abrir transcritor.bat”</b> ou pelo link do GitHub Pages — com dois cliques no index.html não funciona.";
+</script>
+</body>
+</html>

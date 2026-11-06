@@ -1,0 +1,18 @@
+TRANSCRITOR DE AUDIO
+Transforma audios e videos em texto (.txt, .srt e Excel).
+Tudo roda no navegador; nenhum audio e enviado para a internet.
+
+USAR NESTE COMPUTADOR
+  Clique duas vezes em "Abrir transcritor.bat" (precisa do Python).
+  Obs.: abrir o index.html direto com dois cliques NAO funciona.
+  Na 1a vez o modelo e baixado (precisa de internet); depois funciona offline.
+
+PUBLICAR NA INTERNET (gratis, qualquer pessoa abre pelo link)
+  GitHub Pages: Settings > Pages > Branch: main / root > Save.
+  Link: https://SEU-USUARIO.github.io/transcritor-audio/
+
+PASTAS GRANDES NO PC (versao Python)
+  pip install faster-whisper openpyxl
+  Arraste a pasta de audios sobre python\transcrever.bat
+
+Arquivos: index.html (a pagina), worker.js, vendor/ (transformers.js, ONNX Runtime, SheetJS), python/.
