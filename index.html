@@ -93,6 +93,9 @@
             <option value="">Detectar automaticamente</option>
           </select>
         </label>
+        <label>Começar em
+          <input id="startAt" placeholder="00:00:00 (opcional)" style="flex:1;padding:5px 6px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit">
+        </label>
         <label><input type="checkbox" id="optTimes" checked> Mostrar tempo de cada fala no texto</label>
         <label><input type="checkbox" id="optTitles" checked> Título com o nome de cada arquivo</label>
       </div>
@@ -113,10 +116,10 @@
         </div>
       </div>
       <textarea id="out" spellcheck="false" placeholder="A transcrição aparece aqui conforme avança. Você pode editar antes de copiar ou exportar .txt."></textarea>
-      <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Para pastas grandes no PC, use a versão em Python da pasta <code>python/</code>.</p>
+      <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Áudios longos são lidos em blocos de 10 min e o progresso fica salvo: se a aba fechar, solte o mesmo arquivo de novo e ele continua de onde parou. “Começar em” (ex.: 00:34:00 ou 34) pula o início de um arquivo novo.</p>
     </section>
   </div>
-  <footer class="ver">Transcritor de Áudio · <strong>versão 1.3</strong> · atualizado em 06/11/2026 · áudios longos (1h+) e leitor extra para ALAC, AMR, WMA</footer>
+  <footer class="ver">Transcritor de Áudio · <strong>versão 1.4</strong> · atualizado em 06/11/2026 · áudios longos em blocos de 10 min, progresso salvo e “Começar em”</footer>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -199,12 +202,60 @@ async function decodeFFmpeg(file, onStatus) {
     try { await ff.deleteFile("out.raw"); } catch (_) {}
   }
 }
-async function decode(file, onStatus) {
-  // Arquivos grandes (> 40 MB, ~40 min ou mais) vão direto ao FFmpeg: o leitor nativo descompacta tudo
-  // na taxa original (ex.: 1h48 estéreo 44,1 kHz ≈ 2,3 GB de memória) e costuma falhar.
-  if (file.size > 40 * 1024 * 1024) return await decodeFFmpeg(file, onStatus);
+const BIG = 40 * 1024 * 1024;   // acima disso: leitura em blocos de 10 min (memória baixa)
+const BLOCK = 600, EXTRA = 30;  // segundos por bloco + folga para achar um silêncio na emenda
+
+async function decodeSmall(file, onStatus) {
   try { return await decodeNative(await file.arrayBuffer()); }
   catch (e) { return await decodeFFmpeg(file, onStatus); }
+}
+
+// Abre o arquivo no FFmpeg sem copiá-lo para a memória (WORKERFS) e devolve um leitor de blocos
+async function openStream(file, onStatus) {
+  const ff = await getFFmpeg(onStatus);
+  onStatus && onStatus("Abrindo arquivo…");
+  const dir = "/in" + (++seq);
+  await ff.createDir(dir);
+  await ff.mount("WORKERFS", { files: [file] }, dir);
+  const path = dir + "/" + file.name;
+  let logs = [];
+  const onLog = ({ message }) => logs.push(message);
+  ff.on("log", onLog);
+  await ff.exec(["-hide_banner", "-i", path]);           // só para ler a duração (retorna erro, é normal)
+  const m = logs.join("\n").match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+  ff.off("log", onLog);
+  if (!m) { try { await ff.unmount(dir); } catch (_) {} throw new Error("formato não reconhecido (FFmpeg)"); }
+  const duration = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+  return {
+    duration,
+    async read(start, len) {
+      const code = await ff.exec(["-hide_banner", "-ss", start.toFixed(3), "-t", String(len), "-i", path,
+                                  "-vn", "-ac", "1", "-ar", String(SR), "-f", "f32le", "-y", "seg.raw"]);
+      if (code !== 0) throw new Error("falha ao ler trecho (FFmpeg)");
+      const data = await ff.readFile("seg.raw");
+      try { await ff.deleteFile("seg.raw"); } catch (_) {}
+      return new Float32Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 4)).slice();
+    },
+    async close() {
+      try { await ff.unmount(dir); } catch (_) {}
+      try { ff.terminate(); } catch (_) {}
+      ffmpegP = null;                                       // libera a memória do FFmpeg
+    }
+  };
+}
+
+// ---------- progresso salvo no navegador ----------
+const keyOf = (f) => "transcritor:" + f.name + "|" + f.size;
+function saveProg(it) {
+  try { localStorage.setItem(it.key, JSON.stringify({ pos: it.pos, duration: it.duration, segs: it.segs, done: it.done, model: it.model, secs: it.secs })); } catch (_) {}
+}
+function loadProg(f) { try { return JSON.parse(localStorage.getItem(keyOf(f)) || "null"); } catch (_) { return null; } }
+function dropProg(it) { try { localStorage.removeItem(it.key); } catch (_) {} }
+function parseTime(s) {
+  s = (s || "").trim().replace(",", "."); if (!s) return null;
+  const p = s.split(":").map(Number); if (p.some(isNaN)) return null;
+  if (p.length === 1) return p[0] * 60;                      // só um número = minutos
+  return p.reduce((a, v) => a * 60 + v, 0);
 }
 
 // Corta em blocos de até ~29 s, sempre no ponto mais silencioso entre 22 e 29 s (evita cortar palavras)
@@ -224,21 +275,62 @@ const HALLU = /^(legendas? (pela|por)|obrigad[oa] por assistir|inscreva-se|\.+$|
 // ---------- fila ----------
 function addFiles(list) {
   for (const f of list) {
-    const it = { id: ++seq, file: f, status: "Na fila", segs: [], text: "", duration: 0, secs: 0, err: "" };
+    const it = { id: ++seq, file: f, key: keyOf(f), status: "Na fila", segs: [], text: "", duration: 0, secs: 0, pos: 0, done: false, err: "" };
     const li = document.createElement("li");
-    li.innerHTML = `<span class="name"></span><button title="Remover">✕</button><span class="st"></span><span class="bar"><i></i></span>`;
+    li.innerHTML = `<span class="name"></span><button title="Remover (apaga o progresso salvo)">✕</button><span class="st"></span><span class="bar"><i></i></span>`;
     li.querySelector(".name").textContent = f.name;
     li.querySelector("button").onclick = () => {
-      if (it.status.startsWith("Transcrevendo") || it.status.startsWith("Lendo")) return;
-      queue.splice(queue.indexOf(it), 1); li.remove(); render();
+      if (it.busy) return;
+      dropProg(it); queue.splice(queue.indexOf(it), 1); li.remove(); render();
     };
-    it.li = li; $("files").appendChild(li); queue.push(it); setSt(it, "Na fila");
+    it.li = li; $("files").appendChild(li); queue.push(it);
+    const sv = loadProg(f);
+    if (sv && sv.segs) {
+      Object.assign(it, { segs: sv.segs, pos: sv.pos || 0, duration: sv.duration || 0, model: sv.model, secs: sv.secs || 0 });
+      if (sv.done) { finish(it); continue; }
+      setSt(it, `Na fila · continua de ${fmt(it.pos)}`, "", it.duration ? Math.round(it.pos / it.duration * 100) : 0);
+      it.status = "Na fila";
+    } else setSt(it, "Na fila");
   }
+  render();
   run();
 }
 function setSt(it, txt, cls, pct) {
   it.status = txt; const st = it.li.querySelector(".st"); st.textContent = txt; st.className = "st " + (cls || "");
   if (pct != null) it.li.querySelector(".bar i").style.width = pct + "%";
+}
+function finish(it) {
+  it.done = true; it.pos = it.duration;
+  it.text = it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ").trim();
+  setSt(it, `Concluído · ${fmt(it.duration)} de áudio · ${it.text ? it.text.split(" ").length : 0} palavras`, "done", 100);
+}
+
+// Transcreve um trecho já decodificado (x), que começa em "base" segundos no arquivo.
+// Processa só os blocos que começam antes de "limit" s (a sobra entra no próximo trecho). Devolve a nova posição.
+async function transcribeArray(it, x, base, limit, eof, language, clock) {
+  const parts = split(x);
+  let next = base + x.length / SR;
+  for (const [a, b] of parts) {
+    if (!eof && a / SR >= limit) { next = base + a / SR; break; }
+    const off = base + a / SR, end = base + b / SR;
+    const pct = it.duration ? Math.round(off / it.duration * 100) : 0;
+    const done = off - clock.startPos, el = (performance.now() - clock.t0) / 1000;
+    const eta = done > 20 && it.duration ? ` · faltam ~${Math.max(1, Math.round((it.duration - off) * el / done / 60))} min` : "";
+    setSt(it, `Transcrevendo… ${fmt(off)} de ${fmt(it.duration)}${eta}`, "", pct);
+    if (rms(x, a, b) >= 0.003) {                              // pula trecho em silêncio
+      const r = await ask({ type: "chunk", id: it.id, audio: x.slice(a, b), language: language || null });
+      const chunks = r.chunks.length ? r.chunks : [{ timestamp: [0, (b - a) / SR], text: r.text }];
+      for (const c of chunks) {
+        const txt = (c.text || "").trim(); if (!txt || HALLU.test(txt)) continue;
+        const s = off + (c.timestamp?.[0] ?? 0), e = Math.min(end, off + (c.timestamp?.[1] ?? (end - off)));
+        const last = it.segs[it.segs.length - 1];
+        if (last && last.text === txt && s - last.end < 2) continue; // repetição na emenda
+        it.segs.push({ start: s, end: Math.max(e, s), text: txt });
+      }
+    }
+    it.pos = end; it.secs += 0; saveProg(it); render();
+  }
+  return next;
 }
 
 async function run() {
@@ -247,6 +339,7 @@ async function run() {
     for (const it of queue) {
       if (it.status !== "Na fila") continue;
       const model = $("model").value, language = $("lang").value;
+      it.busy = true;
       try {
         if (loadedModel !== model) {
           setSt(it, "Carregando modelo…", "", 0);
@@ -255,34 +348,42 @@ async function run() {
           loadedModel = model; device = r.device;
           $("engine").innerHTML = `Modelo <b>${model.split("/")[1]}</b> pronto · rodando em <b>${device}</b>`;
         }
-        setSt(it, "Lendo áudio…", "", 0);
-        const x = await decode(it.file, (t) => setSt(it, t, "", 0));
-        it.duration = x.length / SR; it.model = model.split("/")[1]; it.segs = [];
-        const parts = split(x), t0 = performance.now();
-        for (let k = 0; k < parts.length; k++) {
-          const [a, b] = parts[k], off = a / SR, end = b / SR;
-          setSt(it, `Transcrevendo… ${fmt(off)} de ${fmt(it.duration)}`, "", Math.round(k / parts.length * 100));
-          if (rms(x, a, b) < 0.003) continue;                       // trecho em silêncio
-          const r = await ask({ type: "chunk", id: it.id, audio: x.slice(a, b), language: language || null });
-          const chunks = r.chunks.length ? r.chunks : [{ timestamp: [0, end - off], text: r.text }];
-          for (const c of chunks) {
-            const txt = (c.text || "").trim(); if (!txt || HALLU.test(txt)) continue;
-            const s = off + (c.timestamp?.[0] ?? 0), e = Math.min(end, off + (c.timestamp?.[1] ?? (end - off)));
-            const last = it.segs[it.segs.length - 1];
-            if (last && last.text === txt && s - last.end < 2) continue; // repetição na emenda
-            it.segs.push({ start: s, end: Math.max(e, s), text: txt });
-          }
-          render();
+        it.model = model.split("/")[1];
+        const startAt = parseTime($("startAt").value);
+        if (startAt != null && it.pos === 0 && !it.segs.length) it.pos = startAt;   // "Começar em" só vale para arquivo novo
+        const t0 = performance.now(), secs0 = it.secs;
+        const clock = { t0, startPos: it.pos };
+        const onStatus = (t) => setSt(it, t, "", null);
+        if (it.file.size <= BIG) {
+          setSt(it, "Lendo áudio…", "", null);
+          const x = await decodeSmall(it.file, onStatus);
+          it.duration = x.length / SR;
+          const from = Math.min(x.length, Math.floor(it.pos * SR));
+          await transcribeArray(it, x.subarray(from), from / SR, Infinity, true, language, clock);
+        } else {
+          const st = await openStream(it.file, onStatus);
+          try {
+            it.duration = st.duration;
+            let pos = it.pos;
+            while (pos < it.duration - 0.25) {
+              setSt(it, `Lendo trecho a partir de ${fmt(pos)}…`, "", null);
+              const x = await st.read(pos, BLOCK + EXTRA);
+              if (!x.length) break;
+              const eof = pos + x.length / SR >= it.duration - 0.5 || x.length < (BLOCK + EXTRA - 1) * SR;
+              const np = await transcribeArray(it, x, pos, BLOCK, eof, language, clock);
+              if (eof || np <= pos) break;
+              pos = np;
+            }
+          } finally { await st.close(); }
         }
-        it.secs = (performance.now() - t0) / 1000;
-        it.text = it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ").trim();
-        setSt(it, `Concluído · ${fmt(it.duration)} de áudio em ${it.secs.toFixed(0)} s · ${it.text ? it.text.split(" ").length : 0} palavras`, "done", 100);
+        it.secs = secs0 + (performance.now() - t0) / 1000;
+        finish(it); saveProg(it);
       } catch (e) {
         it.err = e.message || String(e);
         const msg = /FFmpeg|decode|Unable|EncodingError/i.test(it.err) ? "não foi possível ler este arquivo (" + it.err + ")"
                   : (/fetch|network|load/i.test(it.err) && loadedModel !== $("model").value) ? "não foi possível baixar o modelo (na 1ª vez precisa de internet)" : it.err;
-        setSt(it, "Erro: " + msg, "err", 0);
-      }
+        setSt(it, "Erro: " + msg + (it.pos ? ` · progresso salvo até ${fmt(it.pos)}` : ""), "err", null);
+      } finally { it.busy = false; }
       render();
     }
   } finally { running = false; }
@@ -294,7 +395,7 @@ function render() {
   const times = $("optTimes").checked, titles = $("optTitles").checked;
   const blocks = [];
   for (const it of queue) {
-    if (!it.segs.length && !it.status.startsWith("Concluído")) continue;
+    if (!it.segs.length && !it.done) continue;
     let body = times ? it.segs.map(s => `[${fmt(s.start)}] ${s.text}`).join("\n")
                      : it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ");
     blocks.push((titles ? `# ${it.file.name}\n\n` : "") + body);
@@ -305,9 +406,9 @@ function render() {
   $("stats").innerHTML = done.length ? `<b>${done.length}</b> áudio(s) · <b>${fmt(dur)}</b> de áudio · <b>${words.toLocaleString("pt-BR")}</b> palavras` : (queue.length ? "Transcrevendo…" : "Nenhum áudio transcrito ainda.");
   const has = $("out").value.trim().length > 0;
   for (const id of ["clear", "copy", "saveTxt"]) $(id).disabled = !has && !queue.length;
-  $("saveSrt").disabled = $("saveXlsx").disabled = !done.length;
+  $("saveSrt").disabled = $("saveXlsx").disabled = !queue.some(q => q.done || q.segs.length);
 }
-const doneItems = () => queue.filter(q => q.status.startsWith("Concluído"));
+const doneItems = () => queue.filter(q => q.done || q.segs.length);
 const carimbo = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
 
 $("saveTxt").onclick = () => {
@@ -322,13 +423,14 @@ $("saveSrt").onclick = () => {
   }
 };
 $("saveXlsx").onclick = () => {
-  const d = queue.filter(q => q.status.startsWith("Concluído") || q.status.startsWith("Erro"));
+  const d = queue.filter(q => q.done || q.segs.length || q.status.startsWith("Erro"));
   const resumo = [["Arquivo", "Duração", "Tempo proc. (s)", "Palavras", "Status", "Modelo", "Texto"]];
   const trechos = [["Arquivo", "Início", "Fim", "Texto"]];
   for (const it of d) {
-    const ok = it.status.startsWith("Concluído");
-    resumo.push([it.file.name, ok ? fmt(it.duration) : "", ok ? Math.round(it.secs * 10) / 10 : "", ok && it.text ? it.text.split(" ").length : 0,
-                 ok ? "OK" : "ERRO: " + it.err, it.model || "", it.text]);
+    const ok = it.done, part = !it.done && it.segs.length;
+    const txt = it.text || it.segs.map(s => s.text).join(" ").replace(/\s+/g, " ").trim();
+    resumo.push([it.file.name, it.duration ? fmt(it.duration) : "", ok ? Math.round(it.secs * 10) / 10 : "", txt ? txt.split(" ").length : 0,
+                 ok ? "OK" : part ? `PARCIAL até ${fmt(it.pos)}` : "ERRO: " + it.err, it.model || "", txt]);
     for (const s of it.segs) trechos.push([it.file.name, fmt(s.start), fmt(s.end), s.text]);
   }
   const wb = XLSX.utils.book_new();
@@ -344,7 +446,7 @@ $("copy").onclick = async () => {
   $("copy").textContent = "Copiado ✓"; setTimeout(() => $("copy").textContent = "Copiar", 1400);
 };
 $("clear").onclick = () => {
-  for (let i = queue.length - 1; i >= 0; i--) { const it = queue[i]; if (it.status.startsWith("Transcrevendo") || it.status.startsWith("Lendo") || it.status.startsWith("Carregando")) continue; it.li.remove(); queue.splice(i, 1); }
+  for (let i = queue.length - 1; i >= 0; i--) { const it = queue[i]; if (it.busy) continue; dropProg(it); it.li.remove(); queue.splice(i, 1); }
   render(); if (!queue.length) $("out").value = "";
 };
 $("optTimes").onchange = $("optTitles").onchange = render;

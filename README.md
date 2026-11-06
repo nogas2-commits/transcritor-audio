@@ -39,6 +39,13 @@ Se o computador tiver GPU compatível com WebGPU (Chrome/Edge atualizados), ela 
 
 Mesmo modelo + mesmo áudio = mesmo resultado (decodificação determinística, sem amostragem aleatória).
 
+## Áudios longos e progresso salvo
+
+- Arquivos acima de 40 MB são lidos em **blocos de 10 minutos** (o arquivo não é carregado inteiro na memória), então gravações de várias horas funcionam.
+- O progresso fica **salvo no navegador** a cada trecho. Se a aba fechar ou travar, solte o **mesmo arquivo** de novo: ele continua de onde parou. O ✕ ao lado do arquivo (ou "Limpar") apaga o progresso salvo.
+- **Começar em** (ex.: `00:34:00` ou `34`): pula o início de um arquivo novo.
+- Dá para exportar `.txt`, `.srt` e `.xlsx` a qualquer momento, mesmo no meio (no Excel aparece `PARCIAL até hh:mm:ss`).
+
 ## Como funciona
 
 1. O navegador decodifica o áudio e converte para 16 kHz mono.
