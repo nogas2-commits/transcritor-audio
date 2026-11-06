@@ -16,6 +16,8 @@ Na primeira vez, o modelo escolhido é baixado (de 40 MB a 800 MB, conforme o mo
 
 MP3, M4A, WAV, OGG, OPUS (áudios do WhatsApp), FLAC, AAC, além do áudio de vídeos MP4, WEBM e MOV.
 
+Quando o navegador não consegue ler um arquivo (ex.: **M4A sem perda/ALAC** do Gravador de Voz do iPhone, AMR, WMA), entra um leitor extra (FFmpeg em WebAssembly), baixado só na primeira vez que for necessário (~32 MB). Ele fica dividido em 3 partes (`ffmpeg-core.wasm.part0..2`) para respeitar o limite de 25 MB do upload pelo site do GitHub.
+
 ## Modelos
 
 | Modelo | Velocidade | Precisão | Download |
@@ -64,5 +66,5 @@ O link aparece em alguns minutos: `https://SEU-USUARIO.github.io/transcritor-aud
 
 - `index.html`: a página
 - `worker.js`: roda o Whisper em segundo plano
-- `vendor/`: bibliotecas (transformers.js 3.8.1 + ONNX Runtime WASM, SheetJS)
+- `vendor/`: bibliotecas (transformers.js 3.8.1 + ONNX Runtime WASM, SheetJS, FFmpeg.wasm 0.12 em `vendor/ffmpeg/`)
 - `python/`: versão em Python para lotes

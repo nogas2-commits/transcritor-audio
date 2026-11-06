@@ -71,10 +71,10 @@
     <section class="card">
       <div class="drop" id="drop" tabindex="0" role="button" aria-label="Escolher arquivos">
         <strong>Solte áudios aqui</strong>
-        <span>ou clique para escolher · MP3, M4A, WAV, OGG, OPUS (WhatsApp), FLAC, AAC, MP4, WEBM</span>
+        <span>ou clique para escolher · MP3, M4A, WAV, OGG, OPUS (WhatsApp), FLAC, AAC, AMR, WMA, MP4, WEBM</span>
       </div>
       <input type="file" id="pick" multiple class="hidden"
-        accept="audio/*,video/*,.opus,.ogg,.m4a,.mp3,.wav,.flac,.aac,.mp4,.webm,.mov,.mkv">
+        accept="audio/*,video/*,.opus,.ogg,.m4a,.mp3,.wav,.flac,.aac,.amr,.wma,.3gp,.caf,.mp4,.webm,.mov,.mkv">
 
       <div class="opts">
         <label>Modelo
@@ -116,7 +116,7 @@
       <p class="note">O Excel traz duas abas: <b>Transcricoes</b> (uma linha por áudio) e <b>Trechos</b> (cada fala com início e fim). Mesmo modelo + mesmo áudio = mesmo resultado. Se o computador tiver GPU compatível, ela é usada automaticamente. Para pastas grandes no PC, use a versão em Python da pasta <code>python/</code>.</p>
     </section>
   </div>
-  <footer class="ver">Transcritor de Áudio · <strong>versão 1.0</strong> · atualizado em 06/11/2026 · Whisper no navegador</footer>
+  <footer class="ver">Transcritor de Áudio · <strong>versão 1.1</strong> · atualizado em 06/11/2026 · leitor extra para M4A sem perda (ALAC), AMR, WMA</footer>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
@@ -159,8 +159,7 @@ function download(name, data, type) {
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-async function decode(file) {
-  const buf = await file.arrayBuffer();
+async function decodeNative(buf) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
   try {
     const ab = await ctx.decodeAudioData(buf);
@@ -169,6 +168,40 @@ async function decode(file) {
     for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < d.length; i++) out[i] += d[i] / ab.numberOfChannels; }
     return out;
   } finally { ctx.close(); }
+}
+
+// Plano B: FFmpeg (WebAssembly) para formatos que o navegador não lê (ex.: M4A sem perda/ALAC, AMR, WMA)
+let ffmpegP = null;
+function getFFmpeg(onStatus) {
+  if (!ffmpegP) ffmpegP = (async () => {
+    onStatus && onStatus("Baixando leitor de formatos extras (~32 MB, só na 1ª vez)…");
+    const { FFmpeg } = await import("./vendor/ffmpeg/index.js");
+    const parts = await Promise.all([0, 1, 2].map(i => fetch(`vendor/ffmpeg/ffmpeg-core.wasm.part${i}`).then(r => { if (!r.ok) throw new Error("leitor extra não encontrado"); return r.blob(); })));
+    const wasmURL = URL.createObjectURL(new Blob(parts, { type: "application/wasm" }));
+    const ff = new FFmpeg();
+    await ff.load({ coreURL: new URL("vendor/ffmpeg/ffmpeg-core.js", location.href).href, wasmURL });
+    return ff;
+  })().catch(e => { ffmpegP = null; throw e; });
+  return ffmpegP;
+}
+async function decodeFFmpeg(file, onStatus) {
+  const ff = await getFFmpeg(onStatus);
+  onStatus && onStatus("Convertendo formato…");
+  const inName = "in" + ((file.name.match(/\.[^.]+$/) || [""])[0]).toLowerCase();
+  await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
+  try {
+    const code = await ff.exec(["-i", inName, "-vn", "-ac", "1", "-ar", String(SR), "-f", "f32le", "out.raw"]);
+    if (code !== 0) throw new Error("formato não reconhecido (FFmpeg)");
+    const data = await ff.readFile("out.raw");
+    return new Float32Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 4)).slice();
+  } finally {
+    try { await ff.deleteFile(inName); } catch (_) {}
+    try { await ff.deleteFile("out.raw"); } catch (_) {}
+  }
+}
+async function decode(file, onStatus) {
+  try { return await decodeNative(await file.arrayBuffer()); }
+  catch (e) { return await decodeFFmpeg(file, onStatus); }
 }
 
 // Corta em blocos de até ~29 s, sempre no ponto mais silencioso entre 22 e 29 s (evita cortar palavras)
@@ -220,7 +253,7 @@ async function run() {
           $("engine").innerHTML = `Modelo <b>${model.split("/")[1]}</b> pronto · rodando em <b>${device}</b>`;
         }
         setSt(it, "Lendo áudio…", "", 0);
-        const x = await decode(it.file);
+        const x = await decode(it.file, (t) => setSt(it, t, "", 0));
         it.duration = x.length / SR; it.model = model.split("/")[1]; it.segs = [];
         const parts = split(x), t0 = performance.now();
         for (let k = 0; k < parts.length; k++) {
@@ -243,7 +276,7 @@ async function run() {
         setSt(it, `Concluído · ${fmt(it.duration)} de áudio em ${it.secs.toFixed(0)} s · ${it.text ? it.text.split(" ").length : 0} palavras`, "done", 100);
       } catch (e) {
         it.err = e.message || String(e);
-        const msg = /decode|Unable|EncodingError/i.test(it.err) ? "o navegador não conseguiu ler este formato"
+        const msg = /FFmpeg|decode|Unable|EncodingError/i.test(it.err) ? "não foi possível ler este arquivo (" + it.err + ")"
                   : (/fetch|network|load/i.test(it.err) && loadedModel !== $("model").value) ? "não foi possível baixar o modelo (na 1ª vez precisa de internet)" : it.err;
         setSt(it, "Erro: " + msg, "err", 0);
       }
